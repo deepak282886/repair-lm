@@ -1,108 +1,169 @@
-# Re-Pair Language Model
+# Cognitive Architecture v9.2
 
-A grammar-compression-based language model built on the Re-Pair Forest architecture. No neural networks — the model learns structure entirely from data through joint Re-Pair compression.
+A graph-based learning system that builds hierarchical knowledge representations through Hebbian reinforcement — no neural networks, no backpropagation, CPU-native.
 
-## Architecture
+---
 
-Query resolution runs in order of decreasing confidence:
+## What it is
 
-| Stage | Component | Description |
-|---|---|---|
-| 1 | `memory.py` | Exact normalised question → answer lookup |
-| 2 | `repair_forest.py` | Entity-driven multi-hop composition |
-| 3 | `soft_match.py` | Content-word overlap + entity bonus + predicate gate |
-| 4 | `discovery_graph.py` | Word-overlap similarity search (last resort) |
-| 5 | `repair_grammar.py` | Re-Pair grammar generation (open-ended) |
+A single weighted graph where nodes are concepts and edges are learned associations. The system trains by traversing the graph, rewarding successful paths, and letting everything else decay. Structure emerges bottom-up:
 
-### Modules
+- **Atoms** — primitive tokens (words, strokes, sensor readings)
+- **Chunks** — pairs of atoms that co-activate consistently, promoted into higher-level nodes
+- **Highways** — long-range shortcuts between frequently-rewarded path endpoints
 
-- **`repair_grammar.py`** — Joint Re-Pair compression engine. Repeatedly replaces the most frequent adjacent token pair with a new non-terminal. Running jointly over the whole corpus means shared phrasings (e.g. "what nationality was", "who wrote") become reusable non-terminals. Rule frequencies are preserved as generation probabilities.
+The same update rule applies at every level. Chunks of chunks form naturally. No special-casing per hierarchy level.
 
-- **`memory.py`** — Append-only exact Q/A table. Normalised lookup (lowercase, strip punctuation). Never overwrites stored facts.
+---
 
-- **`entity_extractor.py`** — Identifies entity spans: capitalised proper-noun spans including multi-word names with lowercase particles (da, van, von), with fallback to last content word for lowercase objects like "penicillin".
+## Structural analogy
 
-- **`fact_corpus.py`** — Manages (template, value) pairs derived from Q/A facts. Template = question with entity abstracted to `E`. Value = novel entity the answer introduces.
+The architecture shares its conceptual core with the resolution of Hilbert's 6th problem (Deng-Hani, building on Lanford): just as the Boltzmann equation emerges by focusing only on well-behaved collision histories and discarding pathological ones, this system focuses only on well-rewarded traversal paths — decay prunes the rest.
 
-- **`relation_clustering.py`** — Data-driven DIRT-style clustering. Two templates are merged when they produce overlapping answer values across the corpus. Union-find based. Requires ~50+ facts for reliable signal.
+| Boltzmann / Hilbert 6th | This Architecture |
+|---|---|
+| Collision history trees | Traversal path histories |
+| Recollisions → measure zero | Unrewarded paths → decay to zero |
+| Molecular chaos assumption | Local EMA (neighborhood statistic) |
+| Coarse-grained Boltzmann equation | Chunk nodes (compressed abstractions) |
+| Long-range correlations → negligible | Highway formation (long-range shortcuts) |
+| Collision kernel | Reward function |
 
-- **`predicate_gate.py`** — Predicate mismatch penalty. Hand-written keyword → group dictionary (production default) with optional data-driven clustering overlay. Suppresses false positives like "who discovered X" matching "who composed X".
+---
 
-- **`soft_match.py`** — Scored approximate matching: Jaccard similarity + entity-presence bonus × predicate-mismatch penalty. Gated by absolute threshold and margin over second-best candidate.
+## Key design decisions
 
-- **`repair_forest.py`** — Multi-hop composition pipeline. Order-agnostic clause splitting, novelty-based entity selection, recursive substitution. Supports 3+ hop chains.
+**Everything is self-regulating — no fixed thresholds.**
 
-- **`discovery_graph.py`** — Word-overlap similarity search over all memorised questions. Last resort before returning no answer.
+- **Chunk promotion** fires when an edge's access count reaches the 90th percentile of all edge traversals in the graph. The graph sets its own bar.
+- **Highway formation** fires when a path's accumulated success reaches the 90th percentile of all path successes seen. Same principle.
+- **Highway capacity** is bounded by `sqrt(node_count) * 2`. New stronger highways displace weaker ones. Scales sub-linearly with vocabulary.
+- **Decay rate** adapts to graph density: current edges-per-node divided by the historical EMA of edges-per-node. Dense → aggressive pruning. Sparse → gentle.
+- **Minimum path length** for highway formation grows with average chunk hierarchy depth. Highways compress meaningful sequences, not trivial bigrams.
+- **Coarse-to-fine search** — traversal consults highways first, then chunk-level index edges, then ordinary atom edges. Falls through to the next level if a choice leads to a dead end.
 
-- **`model.py`** — Top-level model wiring all components together.
+**Curriculum is a read-only observer.**
 
-## Training
+The curriculum has zero write access to graph weights. It observes graph statistics and decides what exercises to present and what exploration rate to use. The graph and the curriculum are strictly separated.
 
-### Pretraining
+**Chunk promotion requires same-level pairs.**
 
-Runs joint Re-Pair compression over a large text corpus (FineWeb-Edu by default):
+Atoms promote with atoms → L1 chunks. L1 chunks promote with L1 chunks → L2 chunks. This prevents newly created chunks from immediately cascading into higher-level chunks before the atom layer stabilises.
 
-```bash
-pip install -r requirements.txt
-python pretrain.py
-python pretrain.py --sentences 50000 --rules 2000 --save pretrained.pkl
+---
+
+## Files
+
+```
+core.py            — graph, Hebbian update, chunk promotion, highway formation,
+                     adaptive decay, coarse-to-fine traversal, curriculum scheduler
+environments.py    — BaseEnv interface + WordChain and NumberSequence demo envs
+vocab.py           — word lists and sentence templates per gym stage
+gym_lang.py        — procedural language gym (stages 1-3)
+corpus_lang.py     — real text corpus environment (stages 4-7)
+curriculum_lang.py — 7-stage language curriculum definitions
+generator.py       — graph traversal → text generation + interactive chat loop
+train_language.py  — single-process training script
+train_parallel.py  — parallel training with federated graph merge
 ```
 
-More data → more rule reuse → richer non-terminals → better generation.
+---
 
-### Finetuning
+## Seven-stage language curriculum
 
-Loads QA/instruction pairs, populates memory, runs relation clustering:
+| Stage | Name | Vocab | Window | Notes |
+|---|---|---|---|---|
+| 1 | atoms | ~40 | 2-4 tok | Seed atom layer, high exploration |
+| 2 | bigrams | ~65 | 4-6 tok | Chunk formation begins |
+| 3 | sentences | ~85 | 5-8 tok | SVO patterns, highways start |
+| 4 | real_short | 500 | 4-6 tok | Real corpus co-occurrence enters |
+| 5 | real_medium | 1000 | 5-9 tok | Highway consolidation |
+| 6 | real_long | 2000 | 6-12 tok | Vocabulary saturation |
+| 7 | open | full | 8-16 tok | Consolidation + conversation |
 
-```bash
-python finetune.py --load pretrained.pkl --save finetuned.pkl
-python finetune.py --load pretrained.pkl --dataset tatsu-lab/alpaca --pairs 5000
-```
+Stages 1-3 use a procedural gym with synthetic sentences. Stages 4-7 use real text (Alice in Wonderland by default — free, Project Gutenberg).
 
-Relation clustering runs automatically once the corpus reaches 50+ facts.
+---
 
-## Generation
-
-```bash
-python generate.py --load finetuned.pkl
-python generate.py --load finetuned.pkl --prompt "Who discovered penicillin"
-python generate.py --load finetuned.pkl --mode generate --batch 10
-```
-
-**Modes:**
-- `qa` — full resolution pipeline (memory → composition → soft match → discovery → grammar)
-- `generate` — grammar-only open-ended generation
-- `both` — both outputs side by side
-
-## Scaling
-
-The system improves purely through data:
-
-- **More sentences** → more frequent pairs → richer grammar rules → better generation
-- **More facts** → larger discovery graph → better fallback coverage
-- **More diverse facts** → more shared-value evidence → more relation cluster merges → better predicate gating
-
-## Recommended workflow
+## Quickstart
 
 ```bash
-# 1. Pretrain on web text (builds the grammar)
-python pretrain.py --sentences 50000 --rules 2000 --save pretrained.pkl
+# Download corpus
+curl -o alice.txt https://raw.githubusercontent.com/GITenberg/Alice-s-Adventures-in-Wonderland_11/master/11.txt
 
-# 2. Finetune on instruction pairs (builds memory + relation structure)
-python finetune.py --load pretrained.pkl --dataset tatsu-lab/alpaca --pairs 5000 --save finetuned.pkl
+# Single-process training (all 7 stages, then chat)
+python3 train_language.py
 
-# 3. Generate
-python generate.py --load finetuned.pkl
+# Parallel training (uses all CPU cores)
+python3 train_parallel.py
+
+# Specific stages only
+python3 train_language.py --stages 1-3
+
+# Load saved graph and chat
+python3 train_language.py --chat-only
+
+# Adjust generation temperature
+python3 train_language.py --chat-only --temperature 0.5
 ```
 
-## Install as package
+In chat mode: type `stats` for graph state, `temp 0.5` to adjust temperature.
+
+The graph is saved to `graph.pkl` after training.
+
+---
+
+## Parallel training
 
 ```bash
-pip install -e .
+python3 train_parallel.py --workers 8 --merge-every 300 --stages 1-7
 ```
+
+Each worker runs an independent graph with a slightly different exploration rate. Every `merge-every` ticks, workers send their graph state to the master, which merges by averaging edge weights and broadcasting back. Highway status in the merged graph is resolved by weight percentile — an edge keeps HIGHWAY only if its averaged weight is in the top 10% of all merged edges.
+
+This mirrors the Boltzmann derivation structurally: parallel collision histories summed into the macroscopic equation.
+
+---
+
+## Sample output (stage 5, Alice corpus)
+
+```
+[alice said] → was against it ball can is very old
+[she was]    → noticed that done ' said the small cat
+[the queen]  → hot next moment children round gloves begin at
+```
+
+"noticed that done ' said the small cat" — real Alice dialogue syntax, apostrophe preserved from corpus tokenisation. "children round gloves begin at" — genuine Alice vocabulary in contextually coherent order.
+
+---
+
+## Open questions
+
+- **Reward function** — the language reward (next-token match) is a weak proxy for conversation quality. The architecture is fully implemented; what it learns is entirely determined by the reward signal.
+- **Compositional generalization** — predicted to emerge from chunk + highway interaction. Not yet empirically verified on held-out combinations.
+- **Self-learning** — when does the system generate its own training signal? Unspecified.
+- **Drawing domain** — stroke sequences as atoms, pixel similarity as reward. CPU-native. The hierarchy that emerges would be directly visible.
+- **Game domain** — Pokémon Red or TextWorld. Natural stage progression (gym badges = curriculum stages).
+
+---
 
 ## Requirements
 
-- Python 3.10+
-- `datasets` (HuggingFace)
-- `huggingface-hub`
+```
+python >= 3.10
+numpy
+```
+
+No GPU. No deep learning framework. Runs on CPU.
+
+---
+
+## Background
+
+Architecture designed independently. The Boltzmann analogy was identified post-hoc during implementation review.
+
+The pseudocode specification (v9.2) is the authoritative design document. This codebase is a faithful implementation with the following deviations discovered during implementation:
+
+- Chunk promotion abs condition uses access count (traversal frequency) rather than weight relative to local EMA — weight-based comparison fails when a node has a single dominant outgoing edge, as that edge IS its own local average
+- Local EMA in `step_continuation` uses global EMA as a fast approximation — full BFS local EMA is O(E) and was a dominant cost at scale; reserved for chunk promotion decisions where precision matters
+- `min_ticks` added to curriculum stages — token seeding at stage start would otherwise satisfy readiness thresholds before any traversal occurred
