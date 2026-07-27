@@ -566,16 +566,6 @@ def maybe_promote_chunk(src: str, dst: str, graph: Graph,
         if src in chunk_constituents(dst, graph):
             return None   # src is already a member of dst
 
-    # -- Hierarchy level guard ---------------------------------------
-    # A chunk can only promote with another node of the same kind.
-    # atom+atom -> L1 chunk. L1chunk+L1chunk -> L2 chunk. etc.
-    # This prevents newly created chunks from immediately cascading
-    # into higher chunks before the atom layer has stabilised.
-    src_kind = src_node.kind if src_node else NodeKind.ATOM
-    dst_kind = dst_node.kind if dst_node else NodeKind.ATOM
-    if src_kind != dst_kind:
-        return None   # mixed levels cannot promote together
-
     # -- Abs condition: percentile threshold + dynamic floor ----------
     # Floor = 5% of edge count, minimum CHUNK_MIN_ACCESS.
     # More aggressive than before to prevent explosion.
@@ -675,11 +665,13 @@ def _graph_chunk_depth(graph: Graph) -> float:
 
 
 def _highway_capacity(graph: Graph) -> int:
-    """Dynamic highway capacity: sqrt(node_count) * 2, minimum 10.
-    The graph can maintain at most this many highways at once.
+    """Dynamic highway capacity: nodes // 5, minimum 10.
+    Linear with vocabulary -- long-range associations scale with
+    vocabulary size, not its square root.
+    At 557 nodes: 111 highways. At 1000 nodes: 200 highways.
     New stronger highways displace weaker ones.
     """
-    return max(10, int(math.sqrt(len(graph.nodes)) * 2))
+    return max(10, len(graph.nodes) // 5)
 
 
 def _enforce_highway_capacity(graph: Graph):
@@ -732,8 +724,9 @@ def on_path_complete(path: Path, tick: int, graph: Graph):
         graph.EMA_path_success = ((1 - EMA_ALPHA) * graph.EMA_path_success +
                                    EMA_ALPHA * _path_success[key])
 
-        # Enforce capacity: demote weakest highways if over limit
+        # Enforce capacity: displace weakest highway if over limit
         _enforce_highway_capacity(graph)
+
 
 
 # ─────────────────────────────────────────────
