@@ -306,7 +306,6 @@ def update_edge(src: str, dst: str, reward: float, tick: int,
         graph._adj_add(src, dst)
 
     e.weight        += HEBBIAN_GAIN * reward
-    graph.EMA_floor  = (1 - EMA_ALPHA) * graph.EMA_floor + EMA_ALPHA * e.weight
     e.weight         = max(e.weight, 0.0)
     e.access_count  += 1
     e.last_active_at = tick  # type: ignore[attr-defined]
@@ -314,7 +313,19 @@ def update_edge(src: str, dst: str, reward: float, tick: int,
     if reward > 0:
         e.last_reward_at = tick
 
-    graph.EMA_edge = (1 - EMA_ALPHA) * graph.EMA_edge + EMA_ALPHA * e.weight
+    # Per-node weight normalisation -- keeps total outgoing weight
+    # from src fixed at 1.0. Prevents any single destination from
+    # accumulating unbounded weight and becoming a hub that dominates
+    # all traversal. Consistent with the Hebbian rule: relative
+    # strength of associations matters, not absolute magnitude.
+    outgoing = graph.outgoing_edges(src)
+    total    = sum(x.weight for x in outgoing if x.weight > 0)
+    if total > 0:
+        for x in outgoing:
+            x.weight = max(x.weight / total, 0.0)
+
+    graph.EMA_floor  = (1 - EMA_ALPHA) * graph.EMA_floor + EMA_ALPHA * e.weight
+    graph.EMA_edge   = (1 - EMA_ALPHA) * graph.EMA_edge  + EMA_ALPHA * e.weight
 
     return e
 
@@ -724,8 +735,7 @@ def on_path_complete(path: Path, tick: int, graph: Graph):
         graph.EMA_path_success = ((1 - EMA_ALPHA) * graph.EMA_path_success +
                                    EMA_ALPHA * _path_success[key])
 
-        # Enforce capacity: displace weakest highway if over limit
-        _enforce_highway_capacity(graph)
+
 
 
 
