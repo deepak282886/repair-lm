@@ -1,0 +1,65 @@
+# --- secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+credentials*.json
+service-account*.json
+secrets.*
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- node ---
+node_modules/
+.next/
+dist/
+build/
+
+# --- data, weights, media ---
+data/
+datasets/
+dataset/
+checkpoints/
+*.csv
+*.tsv
+*.xlsx
+*.parquet
+*.npz
+*.npy
+*.pkl
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.blend
+*.blend1
+*.mp4
+*.mov
+*.mkv
+*.mp3
+*.wav
+*.log
+logs/
+
+# --- local ---
+*.db
+*.blend2
+
+__pycache__/
+*.pyc
+.repair/
